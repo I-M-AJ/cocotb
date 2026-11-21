@@ -1,0 +1,21 @@
+# Simics generated build, environment, and log directories
+.venv/
+build/
+win64/
+logs/
+*.log
+
+# Simics CMake/Python caches
+__pycache__/
+*.pyc
+*.pyo
+.project-properties/
+
+# QuestaSim generated artifacts
+sv/work/
+sv/waves.wlf
+sv/transcript
+sv/vsim.wlf
+sv/dpi_generated.h
+*.vstf
+*.dbg

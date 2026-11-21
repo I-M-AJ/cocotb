@@ -1,0 +1,254 @@
+================================================================================
+HOW-TO GUIDE: Simics DML 1.4 + SystemVerilog (QuestaSim DPI-C) Co-Simulation
+Target OS: Windows (PowerShell / CMD)
+Project Directory: F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_sv
+================================================================================
+
+This guide is written for beginners who are new to Intel Simics, DML, and
+RTL co-simulation. It explains the full flow from scratch: creating the project,
+what every file does, compiling both Simics and SystemVerilog, running tests,
+running interactively, viewing waveforms, and debugging.
+
+
+--------------------------------------------------------------------------------
+1. HOW THIS CO-SIMULATION WORKS (BIG PICTURE)
+--------------------------------------------------------------------------------
+In `simics_DML_cli`, the adder math (`a + b`) was written directly in DML.
+In THIS project (`simics_DML_sv`), Simics DML does NO addition math at all.
+Instead, every register write/read in Simics is forwarded in real time to the
+real SystemVerilog RTL (`sv\adder.sv`) running inside QuestaSim:
+
+  [Simics CLI / Test]
+         |  (memory-mapped read/write at 0x10000000)
+         v
+  [adder.dml]  (Simics DML 1.4 device, compiled into win64\lib\adder.dll)
+         |  (C calls: sv_write_a, sv_write_b, sv_read_sum, sv_reset)
+         v
+  [sv_client.c]  (Winsock2 TCP client -> 127.0.0.1:5555)
+         |
+         |  TCP socket ("A 25", "B 17", "SUM", "RST", "QUIT", "SHUTDOWN")
+         v
+  [dpi_sv_server.c]  (Winsock2 TCP server inside QuestaSim via DPI-C)
+         |  (DPI-C exported tasks: sv_write_a, sv_write_b, sv_read_sum, sv_reset)
+         v
+  [tb_top.sv]  (Pulses `clk`, drives `rst`, `a`, `b`, samples `sum`)
+         |
+         v
+  [adder.sv]   (Real SystemVerilog RTL: `always_ff @(posedge clk) sum <= a + b;`)
+
+
+--------------------------------------------------------------------------------
+2. REQUIRED TOOLS & PATHS ON THIS MACHINE
+--------------------------------------------------------------------------------
+- Intel Simics Base 7.113.0:
+    C:\Users\Ajay\AppData\Local\Programs\Simics\simics-7.113.0
+- C/C++ Compiler for Simics (TDM-GCC 64):
+    F:\TDM-GCC-64\bin\gcc.exe
+    F:\TDM-GCC-64\bin\g++.exe
+    F:\TDM-GCC-64\bin\mingw32-make.exe
+- CMake (from MATLAB installation):
+    C:\Program Files\MATLAB\R2023b\bin\win64\cmake\bin\cmake.exe
+- QuestaSim 64-bit 2024.1 (on PATH: `vlib`, `vlog`, `vsim`):
+    C:\questasim64_2024.1\win64\
+
+NOTE ON GNU MAKE vs CMAKE:
+  Simics's GNUmakefile requires MinGW Make 4.1+, while TDM-GCC here ships
+  Make 3.82.90. Therefore, we compile the Simics module using CMake.
+
+
+--------------------------------------------------------------------------------
+3. STEP 1: CREATING THE SIMICS PROJECT FROM SCRATCH
+--------------------------------------------------------------------------------
+(Already done for this folder; shown here so you can reproduce it anytime.)
+
+1) Create the Simics project and Python `.venv`:
+   C:\Users\Ajay\AppData\Local\Programs\Simics\simics-7.113.0\bin\project-setup.bat `
+     --ignore-existing-files --mingw-dir "F:\TDM-GCC-64" `
+     "F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_sv"
+
+2) Generate the `adder` DML skeleton in `modules\adder\`:
+   C:\Users\Ajay\AppData\Local\Programs\Simics\simics-7.113.0\bin\project-setup.bat `
+     --dml-device adder `
+     "F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_sv"
+
+
+--------------------------------------------------------------------------------
+4. STEP 2: FILE-BY-FILE EXPLANATION (WHAT EACH FILE DOES)
+--------------------------------------------------------------------------------
+All paths below are relative to `simics_DML_sv\`:
+
+--- SystemVerilog & DPI-C Server (`sv\`) ---
+- sv\adder.sv
+    The actual hardware RTL module: 8-bit inputs `a`, `b`, 9-bit registered
+    output `sum`, synchronous `clk` and `rst`.
+- sv\tb_top.sv
+    SystemVerilog testbench wrapper around `adder`. Defines `pulse_clk()`,
+    exports DPI-C tasks (`sv_write_a`, `sv_write_b`, `sv_read_sum`, `sv_reset`),
+    and calls `sv_dpi_server_run(5555)` at time 0 to wait for Simics commands.
+- sv\dpi_sv_server.c
+    C DPI-C server using Windows Sockets (`ws2_32`). Listens on `127.0.0.1:5555`
+    (or env var `SIMICS_SV_PORT`), parses text commands (`A <n>`, `B <n>`,
+    `SUM`, `RST`, `QUIT`, `SHUTDOWN`), and calls the exported SV tasks.
+
+--- Simics DML Device & Client (`modules\adder\`) ---
+- modules\adder\adder.dml
+    Simics DML 1.4 device with `bank regs` (32-bit registers):
+      * 0x00 : a    (R/W, [7:0])  -> calls `sv_write_a()` in SV
+      * 0x04 : b    (R/W, [7:0])  -> calls `sv_write_b()` in SV
+      * 0x08 : sum  (RO,  [8:0])  -> calls `sv_read_sum()` in SV
+      * 0x0C : ctrl (W, bit 0=1)  -> calls `sv_reset()` in SV
+- modules\adder\sv_client.h / modules\adder\sv_client.c
+    Winsock2 TCP client compiled into `adder.dll`. Connects to `127.0.0.1:5555`
+    on the first register access and sends commands to QuestaSim.
+- modules\adder\CMakeLists.txt
+    Tells Simics CMake to compile `adder.dml`, `sv_client.c`, and
+    `module_load.py` into `win64\lib\adder.dll`, linking against `ws2_32`.
+- modules\adder\module_load.py
+    Adds `adder0.info` and `adder0.status` commands in the Simics CLI.
+
+--- Tests & Runners ---
+- modules\adder\test\adder_common.py
+    Helper to instantiate an `adder` object in Simics unit tests.
+- modules\adder\test\s-adder.py
+    Automated unit test (`dev_util` + `stest`) verifying reset, `25 + 17 = 42`,
+    `255 + 255 = 510`, read-only `sum` protection (`spec-viol`), and reset.
+- modules\adder\test\s-info-status.py
+    Verifies `adder0.info` and `adder0.status` commands.
+- run_adder_sv_cli.simics
+    Simics CLI script that creates `phys_mem` + `adder0`, maps `adder0.bank.regs`
+    at `0x10000000`, and runs memory-mapped read/write tests.
+- run_sv_cosim.ps1 / run_sv_cosim.bat
+    One-click automation script: compiles SV in QuestaSim, starts `vsim -c`,
+    runs `test-runner.bat`, runs `run_adder_sv_cli.simics`, saves `sv\waves.wlf`,
+    and cleanly shuts down QuestaSim.
+
+
+--------------------------------------------------------------------------------
+5. STEP 3: COMPILING BOTH SIDES
+--------------------------------------------------------------------------------
+Always `cd` into `simics_DML_sv` first:
+  cd F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_sv
+
+A) Compile the Simics DML + C Client (`win64\lib\adder.dll`):
+   1. Configure CMake (only needed once, or if CMakeLists.txt changes):
+      & "C:\Program Files\MATLAB\R2023b\bin\win64\cmake\bin\cmake.exe" `
+        -S . -B build -G "MinGW Makefiles" `
+        -DCMAKE_C_COMPILER="F:/TDM-GCC-64/bin/gcc.exe" `
+        -DCMAKE_CXX_COMPILER="F:/TDM-GCC-64/bin/g++.exe" `
+        -DCMAKE_MAKE_PROGRAM="F:/TDM-GCC-64/bin/mingw32-make.exe"
+
+   2. Build `adder` (run whenever you edit `adder.dml`, `sv_client.c`, or `module_load.py`):
+      & "C:\Program Files\MATLAB\R2023b\bin\win64\cmake\bin\cmake.exe" --build build --target adder
+
+B) Compile the SystemVerilog RTL + DPI-C Server (QuestaSim):
+   (Done automatically by `run_sv_cosim.bat`, or manually as below:)
+      cd sv
+      if (-not (Test-Path work)) { vlib work }
+      vlog -sv -dpiheader dpi_generated.h adder.sv tb_top.sv dpi_sv_server.c
+      cd ..
+
+
+--------------------------------------------------------------------------------
+6. STEP 4: RUNNING CO-SIMULATION (AUTOMATED & INTERACTIVE)
+--------------------------------------------------------------------------------
+A) Automated One-Command Run (Recommended):
+   From `simics_DML_sv\`:
+     .\run_sv_cosim.bat
+
+   This compiles SV, starts QuestaSim in the background, runs all Simics unit
+   tests (`.\bin\test-runner.bat`), runs `run_adder_sv_cli.simics`, saves
+   `sv\waves.wlf`, and shuts down QuestaSim.
+
+B) Manual Interactive Run (Two Terminals - Great for Learning!):
+   Terminal 1 (Start QuestaSim SV Server):
+     cd F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_sv\sv
+     vsim -c -voptargs="+acc" -wlf waves.wlf -ldflags "-lws2_32" tb_top -do "log -r /*; run -all; quit -f"
+
+   Terminal 2 (Run Simics Interactive CLI):
+     cd F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_sv
+     .\simics.bat --no-win run_adder_sv_cli.simics
+
+   At the `simics>` prompt in Terminal 2, try live hardware commands:
+     simics> phys_mem.write -l address = 0x10000000 size = 4 value = 120
+     simics> phys_mem.write -l address = 0x10000004 size = 4 value = 80
+     simics> phys_mem.read  -l address = 0x10000008 size = 4
+     simics> adder0.status
+     simics> quit
+
+   When done with Terminal 1, press Ctrl+C or send `SHUTDOWN` to port 5555.
+
+
+--------------------------------------------------------------------------------
+7. STEP 5: VIEWING RTL WAVEFORMS IN QUESTASIM
+--------------------------------------------------------------------------------
+After running `.\run_sv_cosim.bat` (or `vsim -c` manually), open the recorded
+SystemVerilog waveform file:
+
+  cd F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_sv
+  vsim -view .\sv\waves.wlf
+
+In QuestaSim GUI, drag `tb_top/dut/*` (`clk`, `rst`, `a`, `b`, `sum`) into the
+Wave window to inspect every clock pulse and addition triggered by Simics!
+
+
+--------------------------------------------------------------------------------
+8. DEBUGGING TIPS & COMMON PITFALLS
+--------------------------------------------------------------------------------
+1) "Failed to connect to QuestaSim SV server on 127.0.0.1:5555":
+   - Make sure QuestaSim (`vsim -c`) is running first if you run `simics.bat`
+     or `test-runner.bat` manually without `run_sv_cosim.bat`.
+   - If port 5555 is already in use, set `$env:SIMICS_SV_PORT = "5556"` in
+     PowerShell before launching both QuestaSim and Simics.
+
+2) PowerShell blocks `.ps1` scripts ("running scripts is disabled"):
+   - Always use `.\run_sv_cosim.bat` (or `powershell -ExecutionPolicy Bypass -File .\run_sv_cosim.ps1`).
+
+3) Inspecting Simics test failures:
+   - Check `logs\test\win64\modules\adder\test\test.log`.
+   - Set `adder0.log-level 4` in Simics CLI for verbose device logging.
+
+4) "When no processor exists, -l or -b has to be specified":
+   - Always pass `-l` (little-endian) to `phys_mem.read` / `phys_mem.write`
+     when testing without a CPU in Simics.
+
+5) Edited `adder.dml`, `sv_client.c`, or `module_load.py` but changes didn't show up:
+   - Rebuild `adder.dll` using `cmake --build build --target adder`.
+================================================================================
+
+
+--------------------------------------------------------------------------------
+9. RUNNING ON LINUX (BASH)
+--------------------------------------------------------------------------------
+If you move this project to a Linux machine with Intel Simics + QuestaSim:
+
+1) Porting the C TCP socket layer (one-time change for POSIX):
+   `modules/adder/sv_client.c` and `sv/dpi_sv_server.c` currently use Windows
+   Winsock2 (`<winsock2.h>`, `WSAStartup`, `closesocket`, `ws2_32`). On Linux:
+   - Replace `<winsock2.h>` / `<ws2tcpip.h>` with `<sys/socket.h>`,
+     `<arpa/inet.h>`, `<unistd.h>`, and use `int` / `close()` instead of
+     `SOCKET` / `closesocket()` (no `WSAStartup` / `WSACleanup` needed).
+   - In `modules/adder/CMakeLists.txt`, remove `target_link_libraries(adder PRIVATE ws2_32)`
+     (or wrap it in `if(WIN32) ... endif()`).
+
+2) Re-initialize the Simics project for Linux (`linux64`):
+     cd /path/to/RAL_SIMICS/simics_DML_sv
+     <SIMICS_BASE>/bin/project-setup .
+
+3) Compile the Simics `adder` module (`linux64/lib/adder.so`):
+     make adder
+   (Or with CMake: `cmake -S . -B build && cmake --build build --target adder`)
+
+4) Compile & start the QuestaSim SV DPI-C server (Terminal 1):
+     cd sv
+     vlib work
+     vlog -sv -dpiheader dpi_generated.h adder.sv tb_top.sv dpi_sv_server.c
+     vsim -c -voptargs="+acc" -wlf waves.wlf tb_top -do "log -r /*; run -all; quit -f"
+
+5) Run Simics tests & CLI script (Terminal 2):
+     cd /path/to/RAL_SIMICS/simics_DML_sv
+     ./bin/test-runner
+     ./simics --batch-mode --no-win run_adder_sv_cli.simics
+
+6) View waveforms on Linux:
+     vsim -view ./sv/waves.wlf
+================================================================================

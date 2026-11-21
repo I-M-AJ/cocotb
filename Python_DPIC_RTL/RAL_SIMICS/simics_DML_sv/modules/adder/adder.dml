@@ -1,0 +1,71 @@
+/*
+  © 2026 Intel Corporation
+*/
+
+// adder.dml - Simics DML 1.4 wrapper driving SystemVerilog adder.sv via QuestaSim DPI-C
+
+dml 1.4;
+
+device adder;
+
+param desc = "8-bit SystemVerilog hardware adder (co-simulated)";
+
+param documentation =
+    "Memory-mapped 8-bit adder device backed by SystemVerilog RTL (adder.sv) in QuestaSim.";
+
+import "utility.dml";
+
+header %{
+#include "sv_client.h"
+%}
+
+extern void sv_write_a(uint32 val);
+extern void sv_write_b(uint32 val);
+extern uint32 sv_read_sum(void);
+extern void sv_reset(void);
+
+bank regs {
+    param register_size = 4;
+
+    register a    @ 0x00 "Operand A (bits [7:0]).";
+    register b    @ 0x04 "Operand B (bits [7:0]).";
+    register sum  @ 0x08 is (read_only) "9-bit sum A + B from SV RTL (bits [8:0]).";
+    register ctrl @ 0x0C "Control register (write bit 0 = 1 to reset SV RTL).";
+}
+
+bank regs {
+    register a {
+        method write_register(uint64 value, uint64 enabled_bytes, void *aux) {
+            default(value & 0xff, enabled_bytes, aux);
+            sv_write_a(cast(this.val, uint32));
+            regs.sum.val = sv_read_sum();
+        }
+    }
+
+    register b {
+        method write_register(uint64 value, uint64 enabled_bytes, void *aux) {
+            default(value & 0xff, enabled_bytes, aux);
+            sv_write_b(cast(this.val, uint32));
+            regs.sum.val = sv_read_sum();
+        }
+    }
+
+    register sum {
+        method read_register(uint64 enabled_bytes, void *aux) -> (uint64) {
+            this.val = sv_read_sum();
+            return default(enabled_bytes, aux);
+        }
+    }
+
+    register ctrl {
+        method write_register(uint64 value, uint64 enabled_bytes, void *aux) {
+            if ((value & 0x1) != 0) {
+                sv_reset();
+                regs.a.val = 0;
+                regs.b.val = 0;
+                regs.sum.val = 0;
+            }
+            this.val = 0;
+        }
+    }
+}

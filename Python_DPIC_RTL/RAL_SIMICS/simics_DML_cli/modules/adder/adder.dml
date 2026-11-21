@@ -1,0 +1,56 @@
+/*
+  © 2026 Intel Corporation
+*/
+
+// adder.dml - Custom 8-bit hardware adder modeled in Simics DML 1.4
+
+dml 1.4;
+
+device adder;
+
+param desc = "8-bit hardware adder";
+
+param documentation =
+    "Simple memory-mapped 8-bit adder device (A[7:0] + B[7:0] -> SUM[8:0]).";
+
+import "utility.dml";
+
+bank regs {
+    param register_size = 4;
+
+    register a    @ 0x00 "Operand A (bits [7:0]).";
+    register b    @ 0x04 "Operand B (bits [7:0]).";
+    register sum  @ 0x08 is (read_only) "9-bit sum A + B (bits [8:0]).";
+    register ctrl @ 0x0C "Control register (write bit 0 = 1 to reset A, B, SUM).";
+}
+
+method update_sum() {
+    regs.sum.val = (regs.a.val & 0xff) + (regs.b.val & 0xff);
+}
+
+bank regs {
+    register a {
+        method write_register(uint64 value, uint64 enabled_bytes, void *aux) {
+            default(value & 0xff, enabled_bytes, aux);
+            update_sum();
+        }
+    }
+
+    register b {
+        method write_register(uint64 value, uint64 enabled_bytes, void *aux) {
+            default(value & 0xff, enabled_bytes, aux);
+            update_sum();
+        }
+    }
+
+    register ctrl {
+        method write_register(uint64 value, uint64 enabled_bytes, void *aux) {
+            if ((value & 0x1) != 0) {
+                regs.a.val = 0;
+                regs.b.val = 0;
+                regs.sum.val = 0;
+            }
+            this.val = 0;
+        }
+    }
+}

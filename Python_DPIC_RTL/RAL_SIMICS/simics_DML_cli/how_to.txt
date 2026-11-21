@@ -1,0 +1,213 @@
+================================================================================
+HOW-TO GUIDE: Custom Hardware (8-bit Adder) in Intel Simics using DML 1.4 (CLI)
+Target OS: Windows (PowerShell)
+Project Directory: F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_cli
+================================================================================
+
+This guide explains every step from scratch—creating a Simics project, writing
+a custom hardware device in DML (Device Modeling Language), compiling it into a
+Windows DLL, running automated tests, and interacting/debugging via Simics CLI.
+
+
+--------------------------------------------------------------------------------
+1. WHAT IS SIMICS & DML? (FOR BEGINNERS)
+--------------------------------------------------------------------------------
+- Intel Simics is a full-system simulator used to model hardware (CPUs, memory,
+  peripherals) before or alongside real RTL/silicon.
+- DML (Device Modeling Language, version 1.4) is Simics's specialized language
+  for describing memory-mapped hardware devices (registers, fields, side
+  effects on read/write).
+- A `.dml` file is compiled by `dmlc` into C code, and then compiled by GCC
+  into a shared library (`win64\lib\adder.dll`) that Simics loads at runtime.
+
+
+--------------------------------------------------------------------------------
+2. REQUIRED TOOLS & PATHS ON THIS MACHINE
+--------------------------------------------------------------------------------
+- Simics Base 7.113.0:
+    C:\Users\Ajay\AppData\Local\Programs\Simics\simics-7.113.0
+- C/C++ Compiler (TDM-GCC 64):
+    F:\TDM-GCC-64\bin\gcc.exe
+    F:\TDM-GCC-64\bin\g++.exe
+    F:\TDM-GCC-64\bin\mingw32-make.exe
+- CMake (from MATLAB installation):
+    C:\Program Files\MATLAB\R2023b\bin\win64\cmake\bin\cmake.exe
+
+NOTE ON GNU MAKE vs CMAKE:
+  Simics's GNUmakefile requires MinGW Make 4.1+, whereas TDM-GCC here ships
+  GNU Make 3.82.90. Therefore, we build the project using CMake (`-G "MinGW
+  Makefiles"`), which works cleanly with TDM-GCC.
+
+
+--------------------------------------------------------------------------------
+3. STEP 1: CREATING THE SIMICS PROJECT & DEVICE SKELETON (FROM SCRATCH)
+--------------------------------------------------------------------------------
+(Already done for this folder; shown here so you know how to reproduce it.)
+
+1) Create the Simics project directory and Python virtual environment:
+   C:\Users\Ajay\AppData\Local\Programs\Simics\simics-7.113.0\bin\project-setup.bat `
+     --mingw-dir "F:\TDM-GCC-64" `
+     "F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_cli"
+
+2) Generate the `adder` DML device skeleton inside `modules\adder\`:
+   C:\Users\Ajay\AppData\Local\Programs\Simics\simics-7.113.0\bin\project-setup.bat `
+     --dml-device adder `
+     "F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_cli"
+
+
+--------------------------------------------------------------------------------
+4. STEP 2: IMPORTANT FILES IN THIS PROJECT
+--------------------------------------------------------------------------------
+All paths below are relative to `simics_DML_cli\`:
+
+- modules\adder\adder.dml
+    The hardware model in DML 1.4. Defines `bank regs` with 32-bit registers:
+      * 0x00 : a    (R/W, bits [7:0])  - Operand A
+      * 0x04 : b    (R/W, bits [7:0])  - Operand B
+      * 0x08 : sum  (RO,  bits [8:0])  - 9-bit sum = A + B
+      * 0x0C : ctrl (W,   bit 0 = 1)   - Resets A, B, SUM to 0
+    Whenever `a` or `b` is written, `update_sum()` recomputes `sum`.
+
+- modules\adder\module_load.py
+    Registers CLI commands for the device:
+      * `adder0.info`   -> shows device description and register map
+      * `adder0.status` -> prints current A, B, SUM, and CTRL values
+
+- modules\adder\test\adder_common.py
+    Helper function `create_adder()` used by unit tests to instantiate `adder`.
+
+- modules\adder\test\s-adder.py
+    Automated Python unit test using Simics's `dev_util` and `stest`:
+      * Tests initial reset values (0)
+      * Tests `25 + 17 = 42`
+      * Tests 8-bit masking & 9-bit overflow (`255 + 255 = 510`)
+      * Verifies writing to read-only `sum` logs `spec-viol` and is ignored
+      * Tests reset via `ctrl` register
+
+- modules\adder\test\s-info-status.py
+    Auto-generated test that verifies `info` and `status` commands work.
+
+- run_adder_cli.simics
+    Standalone Simics CLI script that creates a `memory-space` (`phys_mem`),
+    creates `adder0`, maps `adder0.bank.regs` at `0x10000000` (size `0x10`),
+    and runs read/write tests from the Simics command line.
+
+
+--------------------------------------------------------------------------------
+5. STEP 3: CONFIGURING & COMPILING THE ADDER HARDWARE MODULE
+--------------------------------------------------------------------------------
+Always `cd` into `simics_DML_cli` first:
+
+  cd F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_cli
+
+1) Configure CMake (only needed once, or if you add new modules/files):
+   & "C:\Program Files\MATLAB\R2023b\bin\win64\cmake\bin\cmake.exe" `
+     -S . -B build -G "MinGW Makefiles" `
+     -DCMAKE_C_COMPILER="F:/TDM-GCC-64/bin/gcc.exe" `
+     -DCMAKE_CXX_COMPILER="F:/TDM-GCC-64/bin/g++.exe" `
+     -DCMAKE_MAKE_PROGRAM="F:/TDM-GCC-64/bin/mingw32-make.exe"
+
+2) Build the `adder` module (run this whenever you edit `adder.dml` or `module_load.py`):
+   & "C:\Program Files\MATLAB\R2023b\bin\win64\cmake\bin\cmake.exe" --build build --target adder
+
+   Expected output ends with:
+     Linking C shared module ...\win64\lib\adder.dll
+     [100%] Built target adder
+
+
+--------------------------------------------------------------------------------
+6. STEP 4: RUNNING AUTOMATED UNIT TESTS
+--------------------------------------------------------------------------------
+From `simics_DML_cli\`, run:
+
+  .\bin\test-runner.bat
+
+Expected output:
+  ..
+  Ran 2 tests in 1 suites in ~1.7 seconds.
+  All tests completed successfully.
+
+Where to view detailed test logs:
+  logs\test\win64\modules\adder\test\test.log
+
+
+--------------------------------------------------------------------------------
+7. STEP 5: RUNNING IN SIMICS CLI (BATCH & INTERACTIVE)
+--------------------------------------------------------------------------------
+From `simics_DML_cli\`:
+
+A) Batch Mode (runs the script and exits automatically):
+   .\simics.bat --batch-mode --no-win run_adder_cli.simics
+
+B) Interactive CLI Mode (runs the script and drops you at the `simics>` prompt):
+   .\simics.bat --no-win run_adder_cli.simics
+
+Useful commands at the `simics>` prompt:
+  simics> adder0.info                                  # Show register map
+  simics> adder0.status                                # Show current register values
+  simics> phys_mem.map                                 # Show memory-space mappings
+  simics> phys_mem.write -l address = 0x10000000 size = 4 value = 100
+  simics> phys_mem.write -l address = 0x10000004 size = 4 value = 55
+  simics> phys_mem.read  -l address = 0x10000008 size = 4
+  simics> phys_mem.write -l address = 0x1000000C size = 4 value = 1   # Reset
+  simics> quit                                         # Exit Simics
+
+NOTE: `-l` (little-endian) is required on `phys_mem.read` / `phys_mem.write`
+when there is no CPU object in the simulation.
+
+
+--------------------------------------------------------------------------------
+8. STEP 6: DEBUGGING TIPS
+--------------------------------------------------------------------------------
+1) Increase Device Log Verbosity in Simics CLI:
+   In DML, you can add debug prints such as:
+     log info, 2: "Updated sum to %d", regs.sum.val;
+   Then in Simics CLI, set log level up to 4 to see all messages:
+     simics> adder0.log-level 4
+
+2) Inspecting Test Failures:
+   If `.\bin\test-runner.bat` prints `f`, open:
+     logs\test\win64\modules\adder\test\test.log
+   Simics's `stest` automatically fails tests if a `spec-viol` or `error` log
+   occurs (for example, writing to a `read_only` register). Use
+   `with stest.expect_log_mgr(dev.bank.regs, 'spec-viol'):` in tests when
+   intentionally testing illegal writes.
+
+3) DML Syntax / Compile Check Only:
+   If `cmake --build` reports a DML error, check the line number in
+   `modules\adder\adder.dml` from the `dmlc` output. You can also test `dmlc`
+   directly if needed via `.\bin\dmlc.bat`.
+
+4) Common Pitfalls:
+   - Running `cmake --build build` from `RAL_SIMICS\` instead of
+     `RAL_SIMICS\simics_DML_cli\` -> Error: `build is not a directory`.
+   - Forgetting `-l` on `phys_mem.read` / `phys_mem.write` when no CPU exists
+     -> Error: `When no processor exists, -l or -b has to be specified.`
+   - Editing `module_load.py` without running `cmake --build build --target adder`
+     -> Simics still uses the old copy in `win64\lib\python-py3\simmod\adder\`.
+================================================================================
+
+
+--------------------------------------------------------------------------------
+9. RUNNING ON LINUX (BASH)
+--------------------------------------------------------------------------------
+If you move this project to a Linux machine with Intel Simics installed:
+
+1) Re-initialize / update the Simics project for Linux (`linux64`):
+     cd /path/to/RAL_SIMICS/simics_DML_cli
+     <SIMICS_BASE>/bin/project-setup .
+
+2) Compile the `adder` DML module (`linux64/lib/adder.so`):
+   On Linux, standard GNU Make (`make`) works directly:
+     make adder
+   (Or with CMake: `cmake -S . -B build && cmake --build build --target adder`)
+
+3) Run automated unit tests:
+     ./bin/test-runner
+
+4) Run Simics CLI script:
+   - Batch mode:
+       ./simics --batch-mode --no-win run_adder_cli.simics
+   - Interactive CLI mode:
+       ./simics --no-win run_adder_cli.simics
+================================================================================

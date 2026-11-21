@@ -1,0 +1,35 @@
+# Simics CLI script to instantiate and test the custom DML adder device
+# Run in Windows CLI with:
+#   .\simics.bat --batch-mode --no-win run_adder_cli.simics
+
+@import simics
+
+# Create a physical memory space and an adder device instance
+@simics.SIM_create_object("memory-space", "phys_mem", [])
+@simics.SIM_create_object("adder", "adder0", [])
+
+# Map adder0.bank.regs at 0x10000000 (16 bytes: A, B, SUM, CTRL)
+phys_mem.add-map device = adder0.bank.regs base = 0x10000000 length = 0x10
+
+echo "=== Adder Device Info ==="
+adder0.info
+
+echo "=== Test 1: 25 + 17 = 42 ==="
+phys_mem.write -l address = 0x10000000 size = 4 value = 25
+phys_mem.write -l address = 0x10000004 size = 4 value = 17
+$sum1 = (phys_mem.read -l address = 0x10000008 size = 4)
+echo ("SUM = " + (hex $sum1) + " (" + $sum1 + ")")
+adder0.status
+
+echo "=== Test 2: 255 + 255 = 510 (9-bit sum) ==="
+phys_mem.write -l address = 0x10000000 size = 4 value = 0xFF
+phys_mem.write -l address = 0x10000004 size = 4 value = 0xFF
+$sum2 = (phys_mem.read -l address = 0x10000008 size = 4)
+echo ("SUM = " + (hex $sum2) + " (" + $sum2 + ")")
+adder0.status
+
+echo "=== Test 3: Reset via CTRL (0x1000000C) ==="
+phys_mem.write -l address = 0x1000000C size = 4 value = 1
+$sum3 = (phys_mem.read -l address = 0x10000008 size = 4)
+echo ("SUM after reset = " + (hex $sum3) + " (" + $sum3 + ")")
+adder0.status

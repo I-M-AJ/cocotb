@@ -1,0 +1,13 @@
+# Simics generated build, environment, and log directories
+.venv/
+build/
+win64/
+linux64/
+logs/
+*.log
+
+# Simics CMake/Python caches
+__pycache__/
+*.pyc
+*.pyo
+.project-properties/
