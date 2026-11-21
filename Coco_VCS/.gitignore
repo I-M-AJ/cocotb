@@ -1,0 +1,10 @@
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+sim_build/
+*.fsdb
+*.vcd
+novas.conf
+novas.rc
+verdiLog/
