@@ -1,0 +1,10 @@
+/work/
+__pycache__/
+*.py[cod]
+/dpi_generated.h
+/transcript
+*.wlf
+*.vcd
+/*.o
+/*.dll
+/*.so

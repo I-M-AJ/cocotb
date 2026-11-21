@@ -1,0 +1,128 @@
+QuestaSim DPI-C / Python adder example
+=====================================
+
+The simulation runs Python inside the Questa process:
+
+  tb_top.sv -> run_python_test() in dpi_bridge.c -> driver.py
+  -> DPI C wrappers -> exported SystemVerilog tasks -> adder RTL
+
+The Python driver must be imported by the simulator; do not run driver.py
+directly. The driver also opens adder.sv relative to the current directory,
+so run the commands from this project directory.
+
+DPI library loading
+-------------------
+
+On Windows, driver.py loads vsim_auto_compile.dll, which Questa loads before
+Python imports the driver. This name is for the Questa automatic DPI
+compilation flow below and could differ in other Questa versions or build
+flows. Run in a trusted directory with a trusted PATH. On Linux the driver
+looks up the globally visible DPI symbols in the simulator process.
+
+Windows (PowerShell)
+--------------------
+
+Requirements:
+  * 64-bit QuestaSim, a valid license, and vlog, vlib and vsim on PATH.
+  * A matching 64-bit Python installation with Python.h, python315.lib
+    and python315.dll. This example uses Python 3.15 and the installed
+    Questa 2024.1 compiler.
+
+In PowerShell:
+
+    Set-Location 'F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_NO_SIMICS'
+
+    $pyhome = 'C:\Users\Ajay\AppData\Roaming\uv\python\cpython-3.15.2-windows-x86_64-none'
+    $env:PATH = "$pyhome;$env:PATH"
+
+    if (-not (Test-Path .\work)) { vlib work }
+
+    $ccflags = "-I`"$pyhome\include`""
+    vlog -sv -dpiheader dpi_generated.h -ccflags $ccflags `
+        adder.sv tb_top.sv dpi_bridge.c
+    if ($LASTEXITCODE -ne 0) { throw 'Compilation failed' }
+
+    $ldflags = "-L$pyhome\libs -lpython315"
+    vsim -c -voptargs=+acc -wlf waves.wlf -ldflags $ldflags `
+        tb_top -do 'log -r /*; run -all; quit -f'
+
+Change $pyhome and -lpython315 together if using a different Python version.
+The shown $pyhome has no spaces; paths containing spaces may require
+additional quoting in the linker flags. Run these commands in the same
+PowerShell session so the PATH change remains in effect.
+
+Linux (bash)
+------------
+
+This flow has not been tested here: QuestaSim is not installed in WSL.
+Use a Linux Questa installation and license, a compatible C compiler, and
+matching 64-bit Python and development files, including a shared libpython.
+The python3 and python3-config commands below must refer to the same Python
+installation. Questa 2024.1 documents -gblsoauto for making the automatically
+compiled DPI library's symbols visible to ctypes.CDLL(None).
+
+First cd to the project directory on the Linux host, then run:
+
+    command -v vlib
+    command -v vlog
+    command -v vsim
+    command -v python3-config
+    python3 --version
+    python3-config --includes
+    python3-config --embed --ldflags
+
+    if [ ! -d work ]; then vlib work || exit 1; fi
+    vlog -sv -dpiheader dpi_generated.h \
+        -ccflags "$(python3-config --includes)" \
+        adder.sv tb_top.sv dpi_bridge.c || exit 1
+
+    PY_LIBDIR="$(python3 -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR") or "")')"
+    if [ -n "$PY_LIBDIR" ]; then
+        export LD_LIBRARY_PATH="$PY_LIBDIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
+    vsim -c -gblsoauto -voptargs=+acc -wlf waves.wlf \
+        -ldflags "$(python3-config --embed --ldflags)" \
+        tb_top -do 'log -r /*; run -all; quit -f'
+
+If python3-config or Python.h is missing, install the development package
+for the selected Python. If the simulator cannot find libpython at runtime,
+check that PY_LIBDIR contains the matching shared library and is accessible.
+
+Viewing the waveform
+--------------------
+
+The simulation commands log the design hierarchy to waves.wlf in the
+project directory. Open it in the Questa GUI with:
+
+    vsim -view waves.wlf
+
+Select the desired signals in the GUI to display them. The +acc option
+preserves signal visibility and can slow simulation. The WLF is a generated
+file and is excluded from Git.
+
+Expected result and troubleshooting
+-----------------------------------
+
+Successful output includes:
+
+    [Python] Applying Reset...
+    [Python] a=15, b=25 -> sum=40
+    [Python] a=100, b=155 -> sum=255
+    [Python] a=255, b=1 -> sum=256
+    [SV] Simulation complete.
+
+The original FileNotFoundError for dpi_bridge.dll means Python did not run
+the test. "Simulation complete" and "Errors: 0" do not prove success: the
+current C bridge prints import exceptions but still returns success, and
+does not report every exception raised while running the stimulus. Check
+the transcript for Python errors AND all three result lines. The current
+test prints values; it does not assert them.
+
+If symbols are missing on Windows, confirm that Questa loaded
+vsim_auto_compile.dll and that driver.py uses the block above. If Linux
+reports a missing c_write_port symbol, check -gblsoauto support and the
+automatic DPI library loading messages for your Questa version.
+
+This is a small port-level Python wrapper, not a complete register abstraction
+layer or bus protocol driver. Port names and widths are parsed from adder.sv;
+the exported task case statements in tb_top.sv must also match those ports.
