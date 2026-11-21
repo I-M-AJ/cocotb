@@ -1,6 +1,0 @@
-[submodule "Coco_Questasim"]
-	path = Coco_Questasim
-	url = https://github.com/I-M-AJ/Coco_Questasim.git
-[submodule "Python4RTLVerification"]
-	path = Python4RTLVerification
-	url = https://github.com/I-M-AJ/Python4RTLVerification.git
