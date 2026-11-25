@@ -1,0 +1,99 @@
+SIMICS TO SYSTEMVERILOG BUFFERED ADDER - WINDOWS
+================================================
+
+1. What this example does
+-------------------------
+Python writes packed input words to a Simics adder object's register bank.
+The Simics C device transfers each word through a one-word Windows shared-memory
+mailbox to DPI-C in QuestaSim. The SystemVerilog testbench places those words
+in its 1,024-word FIFO, drives the adder RTL ports, and returns each result in
+order through a separate one-word mailbox. There are no sockets or cocotb.
+
+  Python -> Simics adder object -> shared memory -> DPI-C -> SV FIFO
+         -> adder RTL -> result mailbox -> Simics object -> Python
+
+The testbench FIFO has 1,024 entries; the input and result mailboxes each hold
+one additional word. If results are not read, the RTL driver stalls and the
+FIFO and input mailbox can fill.
+
+2. Prerequisites
+----------------
+- Windows, Intel Simics with Model Builder, and QuestaSim.
+- CMake and a MinGW C/C++ toolchain.
+- vlib, vlog, vsim and cmake available on PATH.
+- A Python environment usable by your Simics installation.
+
+This machine was tested with Simics 7.113.0, QuestaSim 2024.1 and TDM-GCC
+under F:\TDM-GCC-64. Simics printed a warning that Python 3.15 is newer than
+its supported ceiling, although the tests passed. Prefer a Simics-supported
+Python version when configuring another environment.
+
+3. One-time setup after checkout
+--------------------------------
+Open PowerShell and enter this directory:
+
+  cd F:\Anamoly_detection\cocotb\Python_DPIC_RTL\RAL_SIMICS\simics_DML_sv_buffer
+
+On this machine, the following commands reuse the Simics project-setup launcher
+and Python environment from the sibling simics_DML_sv project:
+
+  ..\simics_DML_sv\bin\project-setup.bat --no-venv --python ..\simics_DML_sv\.venv\Scripts\python.exe --ignore-existing-files --mingw-dir F:\TDM-GCC-64 .
+  cmake -S . -B build -G "MinGW Makefiles" "-DCMAKE_MAKE_PROGRAM=F:\TDM-GCC-64\bin\mingw32-make.exe" "-DCMAKE_C_COMPILER=F:\TDM-GCC-64\bin\gcc.exe" "-DCMAKE_CXX_COMPILER=F:\TDM-GCC-64\bin\g++.exe"
+
+Adjust the paths for your installation. The sibling project's launcher and
+Python environment must already exist to use the commands above. Alternatively,
+invoke project-setup.bat from your Simics installation with an appropriate
+Python environment and MinGW directory.
+
+Project-setup creates machine-specific launchers and configuration; CMake creates
+the build directory. These generated files are intentionally not checked in.
+
+4. Run
+------
+From this directory:
+
+  .\run_sv_cosim.bat
+
+The launcher builds the Simics device, compiles the SV testbench and DPI-C,
+starts QuestaSim, runs the Simics tests and Python example, and stops QuestaSim.
+Successful output includes:
+
+  All tests completed successfully.
+  25 + 17 = 42
+  255 + 255 = 510
+  0 + 0 = 0
+
+The tests also fill the SV FIFO, exercise backpressure and partial accesses,
+and verify that 1,027 submitted values are returned in order.
+
+5. Register interface
+---------------------
+Use 32-bit accesses to the Simics adder object's register bank:
+
+  0x00  Write packed input: A in bits 7:0, B in bits 15:8.
+  0x04  Read and remove the next 9-bit sum.
+  0x08  Read status:
+        bit 31     bridge connected
+        bit 0      input mailbox free
+        bit 1      result available
+        bits 12:2  last observed SV FIFO occupancy, 0 to 1024
+  0x0c  Write bit 0 to request immediate SV shutdown.
+
+Poll status bit 0 before every input write and bit 1 before every result read.
+Writing a full input mailbox or reading an empty result is reported as an error.
+The FIFO occupancy is a snapshot, not an acknowledgement for a specific word.
+Shutdown can discard pending data; read all required results first.
+
+See run_buffer.py for a Python example using the Simics object's registers.
+
+6. Troubleshooting
+------------------
+- "running scripts is disabled": use run_sv_cosim.bat, which launches the
+  PowerShell script with an execution-policy override for that process.
+- Missing build directory or generated launchers: complete the one-time setup.
+- QuestaSim fails to start: check PATH and the QuestaSim license configuration.
+- Bridge unavailable or startup timeout: check the QuestaSim output. The launcher
+  creates a unique SIMICS_SV_BUFFER_NAME for each run. When starting Simics and
+  QuestaSim manually, give both processes the same name; the default is
+  Local\simics_sv_buffer. Use only one producer and one testbench per name.
+- Tests fail: inspect logs\test\win64\modules\adder\test\test.log.

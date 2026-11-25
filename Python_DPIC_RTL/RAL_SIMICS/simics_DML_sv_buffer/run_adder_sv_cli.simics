@@ -1,0 +1,2 @@
+# Run from this project directory with the SV shared-memory testbench running.
+@exec(compile(open("run_buffer.py", encoding="utf-8").read(), "run_buffer.py", "exec"))
