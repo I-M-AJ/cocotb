@@ -1,0 +1,61 @@
+/*
+  © 2026 Intel Corporation
+*/
+dml 1.4;
+device adder;
+
+param desc = "C-buffered SystemVerilog adder";
+param documentation = "Send packed operands to a C FIFO in DPI-C and read RTL results.";
+import "utility.dml";
+
+header %{
+#include "sv_client.h"
+%}
+
+extern int sv_buffer_push(uint32 word);
+extern int sv_buffer_result(uint32 *word);
+extern uint32 sv_buffer_status(void);
+extern int sv_buffer_shutdown(void);
+
+bank regs {
+    param register_size = 4;
+    register input_word @ 0x00 "Write packed operands: A[7:0], B[15:8].";
+    register result @ 0x04 is (read_only) "Pop one 9-bit adder result.";
+    register status @ 0x08 is (read_only) "Bridge ready, FIFO count, input and result status.";
+    register control @ 0x0c "Write bit 0 to stop the SV simulation.";
+}
+
+bank regs {
+    register input_word {
+        method write_register(uint64 value, uint64 enabled_bytes, void *aux) {
+            if (enabled_bytes != 0xffffffff) {
+                log error: "Input must be written as a 32-bit word";
+            } else if (sv_buffer_push(cast(value, uint32)) != 0) {
+                log error: "Input mailbox is full or the SV bridge is unavailable";
+            }
+        }
+    }
+    register result {
+        method read_register(uint64 enabled_bytes, void *aux) -> (uint64) {
+            local uint32 word = 0;
+            if (enabled_bytes != 0xffffffff) {
+                log error: "Result must be read as a 32-bit word";
+                return 0;
+            }
+            if (sv_buffer_result(&word) != 0)
+                log error: "No result available or the SV bridge is unavailable";
+            return word;
+        }
+    }
+    register status {
+        method read_register(uint64 enabled_bytes, void *aux) -> (uint64) {
+            return sv_buffer_status();
+        }
+    }
+    register control {
+        method write_register(uint64 value, uint64 enabled_bytes, void *aux) {
+            if ((value & 1) != 0 && sv_buffer_shutdown() != 0)
+                log error: "Cannot stop the SV bridge";
+        }
+    }
+}
